@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Unterschrift Leitstand</title>
+<script src="https://cdn.jsdelivr.net/npm/@azure/msal-browser@3.27.0/lib/msal-browser.min.js"></script>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: Arial, sans-serif; background: #f2f4f7; color: #1d2733; }
+  header { background: #1d4e89; color: #fff; padding: 12px 16px; font-size: 20px; font-weight: bold; }
+  header small { display: block; font-size: 13px; font-weight: normal; opacity: .85; }
+  main { padding: 16px; max-width: 700px; margin: 0 auto; }
+  .hinweis { background: #fff3cd; border: 1px solid #e0c36a; padding: 10px; border-radius: 6px; margin-bottom: 12px; }
+  .fehler { background: #fde2e1; border: 1px solid #d9534f; padding: 10px; border-radius: 6px; margin-bottom: 12px; white-space: pre-wrap; }
+  button { font-size: 20px; padding: 14px 18px; border-radius: 8px; border: none; cursor: pointer; }
+  .gross { width: 100%; margin-bottom: 10px; }
+  .blau { background: #1d4e89; color: #fff; }
+  .gruen { background: #2e8540; color: #fff; }
+  .grau { background: #d5dbe3; color: #1d2733; }
+  .name { display: flex; justify-content: space-between; align-items: center; background: #fff; border: 2px solid #c8d0da; text-align: left; }
+  .name.fertig { border-color: #2e8540; background: #e6f4ea; }
+  #feld { width: 100%; height: 260px; background: #fff; border: 2px dashed #1d4e89; border-radius: 8px; touch-action: none; display: block; }
+  .zeile { display: flex; gap: 10px; margin-top: 10px; }
+  .zeile button { flex: 1; }
+  #danke { text-align: center; font-size: 26px; color: #2e8540; padding: 40px 0; }
+  .klein { font-size: 13px; color: #5a6675; margin-top: 18px; }
+  .versteckt { display: none; }
+</style>
+</head>
+<body>
+<header>Unterschrift Leitstand<small id="kopfzeile">Testversion</small></header>
+<main>
+  <div id="meldung"></div>
+
+  <!-- Schritt 0: Anmelden -->
+  <section id="seiteAnmelden" class="versteckt">
+    <p class="hinweis">Einmalig mit dem Standort-Konto anmelden.</p>
+    <button class="gross blau" onclick="anmelden()">Anmelden</button>
+  </section>
+
+  <!-- Schritt 1: Name auswählen -->
+  <section id="seiteNamen" class="versteckt">
+    <p><b>Bitte tippe Deinen Namen an:</b></p>
+    <div id="namensliste"></div>
+    <p class="klein">Angemeldet als <span id="konto"></span></p>
+  </section>
+
+  <!-- Schritt 2: Unterschreiben -->
+  <section id="seiteUnterschrift" class="versteckt">
+    <p><b id="gewaehlt"></b><br>Bitte hier mit dem Finger unterschreiben:</p>
+    <canvas id="feld"></canvas>
+    <div class="zeile">
+      <button class="grau" onclick="feldLeeren()">Löschen</button>
+      <button class="grau" onclick="zurueck()">Zurück</button>
+    </div>
+    <button class="gross gruen" style="margin-top:10px" id="knopfSpeichern" onclick="speichern()">Speichern</button>
+  </section>
+
+  <!-- Schritt 3: Danke -->
+  <section id="seiteDanke" class="versteckt">
+    <div id="danke">Danke, gespeichert ✓</div>
+  </section>
+</main>
+
+<script>
+// ===== Einstellungen =====
+const CLIENT_ID = "4413f8f1-c2e8-40f7-b1ac-cdb665ed83ba";
+const MANDANT   = "c5a53541-6e68-4400-af93-a733555d09b6";
+const ORDNER    = "Unterschriften";          // Ordner im OneDrive des Standort-Kontos
+const SCOPES    = ["Files.ReadWrite"];
+// Testnamen (spaeter kommt die Liste aus Excel)
+const NAMEN = [
+  { zeile: 1, name: "Testfahrer A" },
+  { zeile: 2, name: "Testfahrer B" }
+];
+
+// ===== Anmeldung =====
+const msalApp = new msal.PublicClientApplication({
+  auth: {
+    clientId: CLIENT_ID,
+    authority: "https://login.microsoftonline.com/" + MANDANT,
+    redirectUri: location.origin + location.pathname
+  },
+  cache: { cacheLocation: "localStorage" }
+});
+
+let konto = null;
+let auswahl = null;
+const erledigt = new Set();
+
+function zeige(id) {
+  ["seiteAnmelden", "seiteNamen", "seiteUnterschrift", "seiteDanke"].forEach(s =>
+    document.getElementById(s).classList.toggle("versteckt", s !== id));
+}
+
+function meldeFehler(text) {
+  document.getElementById("meldung").innerHTML = '<div class="fehler"></div>';
+  document.querySelector("#meldung .fehler").textContent = text;
+}
+
+function meldungWeg() { document.getElementById("meldung").innerHTML = ""; }
+
+async function start() {
+  try {
+    await msalApp.initialize();
+    const antwort = await msalApp.handleRedirectPromise();
+    if (antwort && antwort.account) msalApp.setActiveAccount(antwort.account);
+    konto = msalApp.getActiveAccount() || msalApp.getAllAccounts()[0] || null;
+    if (konto) {
+      msalApp.setActiveAccount(konto);
+      zeigeNamen();
+    } else {
+      zeige("seiteAnmelden");
+    }
+  } catch (e) {
+    meldeFehler("Anmeldung hat nicht geklappt:\n" + e.message);
+    zeige("seiteAnmelden");
+  }
+}
+
+function anmelden() {
+  msalApp.loginRedirect({ scopes: SCOPES, prompt: "select_account" });
+}
+
+async function holeToken() {
+  try {
+    const r = await msalApp.acquireTokenSilent({ scopes: SCOPES, account: konto });
+    return r.accessToken;
+  } catch (e) {
+    if (e instanceof msal.InteractionRequiredAuthError) {
+      await msalApp.acquireTokenRedirect({ scopes: SCOPES, account: konto });
+      return null;
+    }
+    throw e;
+  }
+}
+
+// ===== Namensliste =====
+function zeigeNamen() {
+  document.getElementById("konto").textContent = konto.username;
+  document.getElementById("kopfzeile").textContent = "Testversion · " + heuteText();
+  const liste = document.getElementById("namensliste");
+  liste.innerHTML = "";
+  NAMEN.forEach(n => {
+    const b = document.createElement("button");
+    b.className = "gross name" + (erledigt.has(n.zeile) ? " fertig" : "");
+    b.innerHTML = "<span></span><span>" + (erledigt.has(n.zeile) ? "✓" : "") + "</span>";
+    b.firstChild.textContent = n.name;
+    b.onclick = () => waehle(n);
+    liste.appendChild(b);
+  });
+  zeige("seiteNamen");
+}
+
+function waehle(n) {
+  auswahl = n;
+  document.getElementById("gewaehlt").textContent = n.name;
+  zeige("seiteUnterschrift");
+  feldVorbereiten();
+}
+
+function zurueck() { meldungWeg(); zeigeNamen(); }
+
+// ===== Unterschriftsfeld =====
+const feld = document.getElementById("feld");
+const ctx = feld.getContext("2d");
+let malt = false, leer = true;
+
+function feldVorbereiten() {
+  const r = feld.getBoundingClientRect();
+  const f = window.devicePixelRatio || 1;
+  feld.width = Math.round(r.width * f);
+  feld.height = Math.round(r.height * f);
+  ctx.setTransform(f, 0, 0, f, 0, 0);
+  feldLeeren();
+}
+
+function feldLeeren() {
+  ctx.fillStyle = "#fff";
+  ctx.fillRect(0, 0, feld.width, feld.height);
+  ctx.strokeStyle = "#0a1a5c";
+  ctx.lineWidth = 2.5;
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  leer = true;
+}
+
+function punkt(e) {
+  const r = feld.getBoundingClientRect();
+  return { x: e.clientX - r.left, y: e.clientY - r.top };
+}
+
+feld.addEventListener("pointerdown", e => {
+  malt = true; leer = false;
+  feld.setPointerCapture(e.pointerId);
+  const p = punkt(e);
+  ctx.beginPath(); ctx.moveTo(p.x, p.y);
+});
+feld.addEventListener("pointermove", e => {
+  if (!malt) return;
+  const p = punkt(e);
+  ctx.lineTo(p.x, p.y); ctx.stroke();
+});
+["pointerup", "pointercancel", "pointerleave"].forEach(t =>
+  feld.addEventListener(t, () => { malt = false; }));
+
+// ===== Speichern im OneDrive =====
+function zwei(z) { return String(z).padStart(2, "0"); }
+function heuteText() { const d = new Date(); return zwei(d.getDate()) + "." + zwei(d.getMonth() + 1) + "." + d.getFullYear(); }
+
+function bildMitBeschriftung(zeitText) {
+  // Unterschrift plus Fusszeile mit Name, Datum und Uhrzeit
+  const fuss = 40;
+  const c = document.createElement("canvas");
+  c.width = feld.width; c.height = feld.height + fuss;
+  const g = c.getContext("2d");
+  g.fillStyle = "#fff"; g.fillRect(0, 0, c.width, c.height);
+  g.drawImage(feld, 0, 0);
+  g.fillStyle = "#333"; g.font = "22px Arial";
+  g.fillText(auswahl.name + " · " + heuteText() + " " + zeitText, 12, feld.height + 28);
+  return new Promise(ok => c.toBlob(ok, "image/png"));
+}
+
+async function ordnerAnlegen(token, elternPfad, name) {
+  const url = elternPfad
+    ? "https://graph.microsoft.com/v1.0/me/drive/root:/" + encodeURI(elternPfad) + ":/children"
+    : "https://graph.microsoft.com/v1.0/me/drive/root/children";
+  const r = await fetch(url, {
+    method: "POST",
+    headers: { "Authorization": "Bearer " + token, "Content-Type": "application/json" },
+    body: JSON.stringify({ name: name, folder: {}, "@microsoft.graph.conflictBehavior": "fail" })
+  });
+  // 409 = Ordner gibt es schon, das ist in Ordnung
+  if (!r.ok && r.status !== 409) throw new Error("Ordner '" + name + "' konnte nicht angelegt werden (" + r.status + ")");
+}
+
+async function speichern() {
+  if (leer) { meldeFehler("Bitte zuerst unterschreiben."); return; }
+  meldungWeg();
+  const knopf = document.getElementById("knopfSpeichern");
+  knopf.disabled = true; knopf.textContent = "Speichert …";
+  try {
+    const token = await holeToken();
+    if (!token) return; // Seite meldet sich neu an
+    const d = new Date();
+    const tagOrdner = d.getFullYear() + "-" + zwei(d.getMonth() + 1) + "-" + zwei(d.getDate());
+    const zeit = zwei(d.getHours()) + ":" + zwei(d.getMinutes());
+    const dateiName = "Zeile" + auswahl.zeile + "_" + zwei(d.getHours()) + "-" + zwei(d.getMinutes()) + "-" + zwei(d.getSeconds()) + ".png";
+
+    await ordnerAnlegen(token, "", ORDNER);
+    await ordnerAnlegen(token, ORDNER, tagOrdner);
+
+    const bild = await bildMitBeschriftung(zeit);
+    const pfad = ORDNER + "/" + tagOrdner + "/" + dateiName;
+    const r = await fetch("https://graph.microsoft.com/v1.0/me/drive/root:/" + encodeURI(pfad) + ":/content", {
+      method: "PUT",
+      headers: { "Authorization": "Bearer " + token, "Content-Type": "image/png" },
+      body: bild
+    });
+    if (!r.ok) throw new Error("Hochladen fehlgeschlagen (" + r.status + "): " + (await r.text()).slice(0, 300));
+
+    erledigt.add(auswahl.zeile);
+    zeige("seiteDanke");
+    setTimeout(zeigeNamen, 2500);
+  } catch (e) {
+    meldeFehler("Nicht gespeichert! Bitte nochmal versuchen oder auf Papier unterschreiben.\n\n" + e.message);
+  } finally {
+    knopf.disabled = false; knopf.textContent = "Speichern";
+  }
+}
+
+start();
+</script>
+</body>
+</html>
