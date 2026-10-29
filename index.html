@@ -166,7 +166,7 @@ async function ladeListe() {
       const text = new TextDecoder("utf-8").decode(await r.arrayBuffer()).replace(/^\uFEFF/, "");
       NAMEN = text.split(/\r?\n/).filter(z => z.trim() !== "").map(z => {
         const t = z.split("\t");
-        return { zeile: parseInt(t[0], 10), name: (t[1] || "").trim(), dienst: (t[2] || "").trim() };
+        return { zeile: parseInt(t[0], 10), name: (t[1] || "").trim(), dienst: (t[2] || "").trim(), ende: (t[3] || "").trim() };
       }).filter(n => n.zeile > 0 && n.name !== "");
     }
     // Wer hat schon unterschrieben? (Dateien ZeileN_... im Tagesordner)
@@ -191,16 +191,28 @@ function zeigeNamen() {
   document.getElementById("kopfzeile").textContent = "Fahrerliste vom " + datumText(austeilerTag());
   const liste = document.getElementById("namensliste");
   liste.innerHTML = "";
-  NAMEN.forEach(n => {
+  // Faellige zuerst (nach Dienstende), Unterschriebene ganz nach unten
+  const sortiert = NAMEN.slice().sort((a, b) =>
+    (erledigt.has(a.zeile) - erledigt.has(b.zeile)) || (endeMinuten(a.ende) - endeMinuten(b.ende)) || (a.zeile - b.zeile));
+  sortiert.forEach(n => {
     const b = document.createElement("button");
     b.className = "gross name" + (erledigt.has(n.zeile) ? " fertig" : "");
     b.innerHTML = "<span><span></span><small></small></span><span>" + (erledigt.has(n.zeile) ? "✓" : "") + "</span>";
     b.firstChild.firstChild.textContent = n.name;
-    b.firstChild.lastChild.textContent = n.dienst ? "Dienst " + n.dienst : "";
+    b.firstChild.lastChild.textContent = [n.ende ? "Ende " + n.ende : "", n.dienst ? "Dienst " + n.dienst : ""].filter(x => x).join(" · ");
     b.onclick = () => waehle(n);
     liste.appendChild(b);
   });
   zeige("seiteNamen");
+}
+
+// Dienstende als Minuten; Ende nach Mitternacht (vor 3 Uhr) zaehlt als spaet
+function endeMinuten(t) {
+  const m = /^(\d{1,2}):(\d{2})/.exec(t || "");
+  if (!m) return 9999;
+  let min = parseInt(m[1], 10) * 60 + parseInt(m[2], 10);
+  if (parseInt(m[1], 10) < WECHSEL_STUNDE) min += 24 * 60;
+  return min;
 }
 
 function waehle(n) {
